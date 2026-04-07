@@ -83,6 +83,13 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
   #send-btn:hover {{ opacity: 0.9; }}
   #send-btn:active {{ opacity: 0.7; }}
   #send-btn:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+  #stop-btn {{ background: rgba(247,118,142,0.15); color: var(--red); border: 1px solid rgba(247,118,142,0.4); padding: 10px 16px; border-radius: 6px; font-family: var(--font); font-size: 14px; cursor: pointer; font-weight: 600; min-height: 42px; display: none; -webkit-tap-highlight-color: transparent; }}
+  #stop-btn:hover {{ background: rgba(247,118,142,0.25); }}
+  #stop-btn:active {{ opacity: 0.7; }}
+  #processing-indicator {{ display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--yellow); padding: 2px 8px; border-radius: 10px; background: rgba(224,175,104,0.1); white-space: nowrap; }}
+  #processing-indicator.active {{ display: flex; }}
+  @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.4}} }}
+  .pulse-dot {{ width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); animation: pulse 1.2s ease-in-out infinite; }}
   @media (max-width: 600px) {{
     #header h1 {{ font-size: 13px; }}
     #session-id {{ display: none; }}
@@ -96,11 +103,13 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
 <div id="header">
   <h1>Free CC Relay</h1>
   <span id="status" class="status-waiting">Connecting...</span>
+  <span id="processing-indicator"><span class="pulse-dot"></span>Processing...</span>
   <span id="session-id">{session_short}...</span>
 </div>
 <div id="messages"></div>
 <div id="input-area">
   <textarea id="input" rows="1" placeholder="Type a message..." autocomplete="off" disabled></textarea>
+  <button id="stop-btn">Stop</button>
   <button id="send-btn" disabled>Send</button>
 </div>
 <script>
@@ -142,8 +151,16 @@ function renderMarkdown(text){{
 var messagesEl=document.getElementById('messages');
 var inputEl=document.getElementById('input');
 var sendBtn=document.getElementById('send-btn');
+var stopBtn=document.getElementById('stop-btn');
 var statusEl=document.getElementById('status');
-var ws,currentStreamId=null,currentStreamEl=null,reconnectTimer=null;
+var processingEl=document.getElementById('processing-indicator');
+var ws,currentStreamId=null,currentStreamEl=null,reconnectTimer=null,isProcessing=false;
+
+function setProcessing(active){{
+  isProcessing=active;
+  processingEl.classList.toggle('active',active);
+  stopBtn.style.display=active?'block':'none';
+}}
 
 function setStatus(text,cls){{statusEl.textContent=text;statusEl.className=cls;}}
 
@@ -180,7 +197,7 @@ function addToolMessage(name,summary,detail){{
 function connect(){{
   ws=new WebSocket({ws_url_json});
   ws.onopen=function(){{setStatus('Connected','status-connected');inputEl.disabled=false;sendBtn.disabled=false;inputEl.focus();}};
-  ws.onclose=function(){{setStatus('Disconnected','status-disconnected');inputEl.disabled=true;sendBtn.disabled=true;reconnectTimer=setTimeout(connect,3000);}};
+  ws.onclose=function(){{setStatus('Disconnected','status-disconnected');inputEl.disabled=true;sendBtn.disabled=true;setProcessing(false);reconnectTimer=setTimeout(connect,3000);}};
   ws.onerror=function(){{}};
   ws.onmessage=function(event){{
     var msg;try{{msg=JSON.parse(event.data);}}catch(e){{return;}}
@@ -194,6 +211,7 @@ function connect(){{
       case 'tool_use':addToolMessage(msg.name,msg.content,msg.detail);break;
       case 'tool_result':addToolMessage('Result',msg.content,msg.detail);break;
       case 'thinking':addThinkingMessage(msg.content);break;
+      case 'status':setProcessing(!!msg.processing);break;
       case 'system':addMessage('system',msg.content);break;
     }}
   }};
@@ -203,9 +221,17 @@ function send(){{
   var text=inputEl.value.trim();if(!text||!ws||ws.readyState!==WebSocket.OPEN)return;
   ws.send(JSON.stringify({{type:'message',role:'user',content:text,id:'web_'+Date.now(),timestamp:Date.now()}}));
   addMessage('user',text);inputEl.value='';inputEl.focus();
+  setProcessing(true);
+}}
+
+function stop(){{
+  if(!ws||ws.readyState!==WebSocket.OPEN)return;
+  ws.send(JSON.stringify({{type:'interrupt',timestamp:Date.now()}}));
+  setProcessing(false);
 }}
 
 sendBtn.addEventListener('click',send);
+stopBtn.addEventListener('click',stop);
 inputEl.addEventListener('keydown',function(e){{if(e.key==='Enter'&&!e.shiftKey){{e.preventDefault();send();}}}});
 inputEl.addEventListener('input',function(){{inputEl.style.height='auto';inputEl.style.height=Math.min(inputEl.scrollHeight,120)+'px';}});
 
