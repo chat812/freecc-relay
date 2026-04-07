@@ -59,6 +59,14 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
   .md table {{ border-collapse: collapse; margin: 0.5em 0; font-size: 12px; width: auto; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }}
   .md th, .md td {{ border: 1px solid var(--border); padding: 4px 10px; text-align: left; white-space: nowrap; }}
   .md th {{ background: rgba(0,0,0,0.25); font-weight: 600; }}
+  .msg-thinking {{ background: rgba(224,175,104,0.06); border: 1px solid rgba(224,175,104,0.2); align-self: flex-start; font-size: 13px; padding: 6px 10px; max-width: 96%; border-radius: 6px; }}
+  .thinking-header {{ display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; min-height: 28px; }}
+  .thinking-icon {{ font-size: 12px; color: var(--yellow); }}
+  .thinking-label {{ font-weight: 600; color: var(--yellow); font-size: 12px; }}
+  .thinking-toggle {{ font-size: 9px; color: var(--dim); transition: transform 0.15s; display: inline-block; }}
+  .thinking-toggle.open {{ transform: rotate(90deg); }}
+  .thinking-content {{ display: none; margin-top: 6px; padding: 6px 8px; background: rgba(0,0,0,0.25); border-radius: 4px; font-size: 12px; color: var(--dim); max-height: 300px; overflow-y: auto; white-space: pre-wrap; -webkit-overflow-scrolling: touch; }}
+  .thinking-content.open {{ display: block; }}
   .tool-header {{ display: flex; align-items: center; gap: 6px; user-select: none; flex-wrap: wrap; min-height: 32px; }}
   .tool-icon {{ font-size: 10px; color: var(--accent); }}
   .tool-name {{ font-weight: 600; color: var(--accent); font-size: 13px; }}
@@ -146,6 +154,17 @@ function addMessage(role,content,id){{
   messagesEl.appendChild(div);messagesEl.scrollTop=messagesEl.scrollHeight;return div;
 }}
 
+function addThinkingMessage(content){{
+  var div=document.createElement('div');div.className='msg msg-thinking';
+  var header=document.createElement('div');header.className='thinking-header';
+  var toggle=document.createElement('span');toggle.className='thinking-toggle';toggle.textContent='\u25B6';
+  var icon=document.createElement('span');icon.className='thinking-icon';icon.textContent='\u2234';
+  var label=document.createElement('span');label.className='thinking-label';label.textContent='Thinking';
+  header.appendChild(toggle);header.appendChild(icon);header.appendChild(label);div.appendChild(header);
+  if(content){{var body=document.createElement('div');body.className='thinking-content';body.textContent=content;div.appendChild(body);header.addEventListener('click',function(){{body.classList.toggle('open');toggle.classList.toggle('open');}});}}
+  messagesEl.appendChild(div);messagesEl.scrollTop=messagesEl.scrollHeight;return div;
+}}
+
 function addToolMessage(name,summary,detail){{
   var div=document.createElement('div');div.className='msg msg-tool';
   var header=document.createElement('div');header.className='tool-header';
@@ -166,7 +185,7 @@ function connect(){{
   ws.onmessage=function(event){{
     var msg;try{{msg=JSON.parse(event.data);}}catch(e){{return;}}
     switch(msg.type){{
-      case 'history':messagesEl.innerHTML='';for(var i=0;i<msg.messages.length;i++){{var m=msg.messages[i];if(m.type==='tool_use')addToolMessage(m.name,m.content,m.detail);else if(m.type==='tool_result')addToolMessage('Result',m.content,m.detail);else addMessage(m.role||m.type,m.content||'',m.id);}}break;
+      case 'history':messagesEl.innerHTML='';for(var i=0;i<msg.messages.length;i++){{var m=msg.messages[i];if(m.type==='tool_use')addToolMessage(m.name,m.content,m.detail);else if(m.type==='tool_result')addToolMessage('Result',m.content,m.detail);else if(m.type==='thinking')addThinkingMessage(m.content);else addMessage(m.role||m.type,m.content||'',m.id);}}break;
       case 'session_info':setStatus(msg.cliConnected?'CLI Connected':'Waiting for CLI',msg.cliConnected?'status-connected':'status-waiting');break;
       case 'message':addMessage(msg.role,msg.content,msg.id);break;
       case 'stream_start':currentStreamId=msg.id;currentStreamEl=addMessage('assistant','',msg.id);currentStreamEl.classList.add('msg-stream');break;
@@ -174,6 +193,7 @@ function connect(){{
       case 'stream_end':if(currentStreamEl){{var te2=currentStreamEl.querySelector('div:last-child');if(te2&&te2._raw){{te2.replaceWith(renderMarkdown(te2._raw));}}currentStreamEl.classList.remove('msg-stream');currentStreamEl=null;currentStreamId=null;messagesEl.scrollTop=messagesEl.scrollHeight;}}break;
       case 'tool_use':addToolMessage(msg.name,msg.content,msg.detail);break;
       case 'tool_result':addToolMessage('Result',msg.content,msg.detail);break;
+      case 'thinking':addThinkingMessage(msg.content);break;
       case 'system':addMessage('system',msg.content);break;
     }}
   }};
