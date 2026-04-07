@@ -99,6 +99,14 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
   .perm-allow:hover {{ background: rgba(158,206,106,0.25); }}
   .perm-reject {{ background: rgba(247,118,142,0.15); color: var(--red); border: 1px solid rgba(247,118,142,0.4); padding: 6px 18px; border-radius: 5px; cursor: pointer; font-size: 13px; font-family: var(--font); font-weight: 600; -webkit-tap-highlight-color: transparent; }}
   .perm-reject:hover {{ background: rgba(247,118,142,0.25); }}
+  #prompt-request {{ display: none; background: rgba(122,162,247,0.06); border: 1px solid rgba(122,162,247,0.25); border-radius: 8px; padding: 10px 14px; margin: 4px 12px; margin-left: calc(12px + var(--safe-left)); margin-right: calc(12px + var(--safe-right)); flex-shrink: 0; }}
+  #prompt-request.active {{ display: block; }}
+  .prompt-message {{ color: var(--text); font-size: 13px; margin-bottom: 8px; }}
+  .prompt-options {{ display: flex; flex-direction: column; gap: 5px; }}
+  .prompt-option {{ background: rgba(122,162,247,0.08); border: 1px solid rgba(122,162,247,0.2); color: var(--text); padding: 7px 12px; border-radius: 5px; cursor: pointer; font-size: 13px; font-family: var(--font); text-align: left; transition: background 0.1s; -webkit-tap-highlight-color: transparent; }}
+  .prompt-option:hover {{ background: rgba(122,162,247,0.18); border-color: var(--accent); }}
+  .prompt-option-key {{ color: var(--accent); font-weight: 600; margin-right: 8px; }}
+  .prompt-option-desc {{ color: var(--dim); font-size: 11px; margin-top: 2px; }}
   @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.4}} }}
   .pulse-dot {{ width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); animation: pulse 1.2s ease-in-out infinite; }}
   @media (max-width: 600px) {{
@@ -125,6 +133,10 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
     <button class="perm-allow" id="perm-allow">Allow</button>
     <button class="perm-reject" id="perm-reject">Reject</button>
   </div>
+</div>
+<div id="prompt-request">
+  <div class="prompt-message" id="prompt-message"></div>
+  <div class="prompt-options" id="prompt-options"></div>
 </div>
 <div id="input-area">
   <textarea id="input" rows="1" placeholder="Type a message..." autocomplete="off" disabled></textarea>
@@ -176,9 +188,30 @@ var processingEl=document.getElementById('processing-indicator');
 var permReqEl=document.getElementById('permission-request');
 var permToolEl=document.getElementById('perm-tool');
 var permDetailEl=document.getElementById('perm-detail');
-var ws,currentStreamId=null,currentStreamEl=null,reconnectTimer=null,isProcessing=false,currentPermId=null;
+var promptReqEl=document.getElementById('prompt-request');
+var promptMsgEl=document.getElementById('prompt-message');
+var promptOptsEl=document.getElementById('prompt-options');
+var ws,currentStreamId=null,currentStreamEl=null,reconnectTimer=null,isProcessing=false,currentPermId=null,currentPromptId=null;
 function showPermissionRequest(id,tool,detail){{currentPermId=id;permToolEl.textContent=tool||'Tool';permDetailEl.textContent=detail||'';permReqEl.classList.add('active');}}
 function clearPermissionRequest(){{permReqEl.classList.remove('active');currentPermId=null;}}
+function showPromptRequest(id,message,options){{
+  currentPromptId=id;promptMsgEl.textContent=message||'';promptOptsEl.innerHTML='';
+  (options||[]).forEach(function(opt){{
+    var btn=document.createElement('button');btn.className='prompt-option';
+    var keySpan=document.createElement('span');keySpan.className='prompt-option-key';keySpan.textContent=opt.key+'.';
+    var labelSpan=document.createElement('span');labelSpan.textContent=opt.label;
+    btn.appendChild(keySpan);btn.appendChild(labelSpan);
+    if(opt.description){{var desc=document.createElement('div');desc.className='prompt-option-desc';desc.textContent=opt.description;btn.appendChild(desc);}}
+    btn.addEventListener('click',function(){{
+      if(!ws||ws.readyState!==WebSocket.OPEN||!currentPromptId)return;
+      ws.send(JSON.stringify({{type:'prompt_response',id:currentPromptId,selected:opt.key,timestamp:Date.now()}}));
+      clearPromptRequest();
+    }});
+    promptOptsEl.appendChild(btn);
+  }});
+  promptReqEl.classList.add('active');
+}}
+function clearPromptRequest(){{promptReqEl.classList.remove('active');currentPromptId=null;promptOptsEl.innerHTML='';}}
 
 function setProcessing(active){{
   isProcessing=active;
@@ -222,7 +255,7 @@ function addToolMessage(name,summary,detail){{
 function connect(){{
   ws=new WebSocket({ws_url_json});
   ws.onopen=function(){{setStatus('Connected','status-connected');inputEl.disabled=false;sendBtn.disabled=false;inputEl.focus();}};
-  ws.onclose=function(){{setStatus('Disconnected','status-disconnected');inputEl.disabled=true;sendBtn.disabled=true;setProcessing(false);clearPermissionRequest();reconnectTimer=setTimeout(connect,3000);}};
+  ws.onclose=function(){{setStatus('Disconnected','status-disconnected');inputEl.disabled=true;sendBtn.disabled=true;setProcessing(false);clearPermissionRequest();clearPromptRequest();reconnectTimer=setTimeout(connect,3000);}};
   ws.onerror=function(){{}};
   ws.onmessage=function(event){{
     var msg;try{{msg=JSON.parse(event.data);}}catch(e){{return;}}
@@ -238,6 +271,7 @@ function connect(){{
       case 'thinking':addThinkingMessage(msg.content);break;
       case 'status':setProcessing(!!msg.processing);break;
       case 'permission_request':if(msg.id)showPermissionRequest(msg.id,msg.name,msg.detail);else clearPermissionRequest();break;
+      case 'prompt_request':if(msg.id)showPromptRequest(msg.id,msg.content,msg.options);else clearPromptRequest();break;
       case 'system':addMessage('system',msg.content);break;
     }}
   }};
