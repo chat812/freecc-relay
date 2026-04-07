@@ -160,6 +160,7 @@ function setProcessing(active){{
   isProcessing=active;
   processingEl.classList.toggle('active',active);
   stopBtn.style.display=active?'block':'none';
+  sendBtn.style.display=active?'none':'block';
 }}
 
 function setStatus(text,cls){{statusEl.textContent=text;statusEl.className=cls;}}
