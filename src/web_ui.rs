@@ -88,6 +88,17 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
   #stop-btn:active {{ opacity: 0.7; }}
   #processing-indicator {{ display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--yellow); padding: 2px 8px; border-radius: 10px; background: rgba(224,175,104,0.1); white-space: nowrap; }}
   #processing-indicator.active {{ display: flex; }}
+  #permission-request {{ display: none; background: rgba(247,118,142,0.06); border: 1px solid rgba(247,118,142,0.35); border-radius: 8px; padding: 10px 14px; margin: 4px 12px; margin-left: calc(12px + var(--safe-left)); margin-right: calc(12px + var(--safe-right)); flex-shrink: 0; }}
+  #permission-request.active {{ display: block; }}
+  .perm-header {{ display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }}
+  .perm-icon {{ font-size: 13px; }}
+  .perm-tool {{ color: var(--red); font-weight: 600; font-size: 13px; }}
+  .perm-detail {{ color: var(--dim); font-size: 12px; margin-bottom: 10px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto; }}
+  .perm-buttons {{ display: flex; gap: 8px; }}
+  .perm-allow {{ background: rgba(158,206,106,0.15); color: var(--green); border: 1px solid rgba(158,206,106,0.4); padding: 6px 18px; border-radius: 5px; cursor: pointer; font-size: 13px; font-family: var(--font); font-weight: 600; -webkit-tap-highlight-color: transparent; }}
+  .perm-allow:hover {{ background: rgba(158,206,106,0.25); }}
+  .perm-reject {{ background: rgba(247,118,142,0.15); color: var(--red); border: 1px solid rgba(247,118,142,0.4); padding: 6px 18px; border-radius: 5px; cursor: pointer; font-size: 13px; font-family: var(--font); font-weight: 600; -webkit-tap-highlight-color: transparent; }}
+  .perm-reject:hover {{ background: rgba(247,118,142,0.25); }}
   @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.4}} }}
   .pulse-dot {{ width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); animation: pulse 1.2s ease-in-out infinite; }}
   @media (max-width: 600px) {{
@@ -107,6 +118,14 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
   <span id="session-id">{session_short}...</span>
 </div>
 <div id="messages"></div>
+<div id="permission-request">
+  <div class="perm-header"><span class="perm-icon">&#9888;</span><span id="perm-tool"></span></div>
+  <div class="perm-detail" id="perm-detail"></div>
+  <div class="perm-buttons">
+    <button class="perm-allow" id="perm-allow">Allow</button>
+    <button class="perm-reject" id="perm-reject">Reject</button>
+  </div>
+</div>
 <div id="input-area">
   <textarea id="input" rows="1" placeholder="Type a message..." autocomplete="off" disabled></textarea>
   <button id="stop-btn">Stop</button>
@@ -154,7 +173,12 @@ var sendBtn=document.getElementById('send-btn');
 var stopBtn=document.getElementById('stop-btn');
 var statusEl=document.getElementById('status');
 var processingEl=document.getElementById('processing-indicator');
-var ws,currentStreamId=null,currentStreamEl=null,reconnectTimer=null,isProcessing=false;
+var permReqEl=document.getElementById('permission-request');
+var permToolEl=document.getElementById('perm-tool');
+var permDetailEl=document.getElementById('perm-detail');
+var ws,currentStreamId=null,currentStreamEl=null,reconnectTimer=null,isProcessing=false,currentPermId=null;
+function showPermissionRequest(id,tool,detail){{currentPermId=id;permToolEl.textContent=tool||'Tool';permDetailEl.textContent=detail||'';permReqEl.classList.add('active');}}
+function clearPermissionRequest(){{permReqEl.classList.remove('active');currentPermId=null;}}
 
 function setProcessing(active){{
   isProcessing=active;
@@ -198,7 +222,7 @@ function addToolMessage(name,summary,detail){{
 function connect(){{
   ws=new WebSocket({ws_url_json});
   ws.onopen=function(){{setStatus('Connected','status-connected');inputEl.disabled=false;sendBtn.disabled=false;inputEl.focus();}};
-  ws.onclose=function(){{setStatus('Disconnected','status-disconnected');inputEl.disabled=true;sendBtn.disabled=true;setProcessing(false);reconnectTimer=setTimeout(connect,3000);}};
+  ws.onclose=function(){{setStatus('Disconnected','status-disconnected');inputEl.disabled=true;sendBtn.disabled=true;setProcessing(false);clearPermissionRequest();reconnectTimer=setTimeout(connect,3000);}};
   ws.onerror=function(){{}};
   ws.onmessage=function(event){{
     var msg;try{{msg=JSON.parse(event.data);}}catch(e){{return;}}
@@ -213,6 +237,7 @@ function connect(){{
       case 'tool_result':addToolMessage('Result',msg.content,msg.detail);break;
       case 'thinking':addThinkingMessage(msg.content);break;
       case 'status':setProcessing(!!msg.processing);break;
+      case 'permission_request':if(msg.id)showPermissionRequest(msg.id,msg.name,msg.detail);else clearPermissionRequest();break;
       case 'system':addMessage('system',msg.content);break;
     }}
   }};
@@ -233,6 +258,8 @@ function stop(){{
 
 sendBtn.addEventListener('click',send);
 stopBtn.addEventListener('click',stop);
+document.getElementById('perm-allow').addEventListener('click',function(){{if(!ws||ws.readyState!==WebSocket.OPEN||!currentPermId)return;ws.send(JSON.stringify({{type:'permission_response',id:currentPermId,decision:'allow',timestamp:Date.now()}}));clearPermissionRequest();}});
+document.getElementById('perm-reject').addEventListener('click',function(){{if(!ws||ws.readyState!==WebSocket.OPEN||!currentPermId)return;ws.send(JSON.stringify({{type:'permission_response',id:currentPermId,decision:'reject',timestamp:Date.now()}}));clearPermissionRequest();}});
 inputEl.addEventListener('keydown',function(e){{if(e.key==='Enter'&&!e.shiftKey){{e.preventDefault();send();}}}});
 inputEl.addEventListener('input',function(){{inputEl.style.height='auto';inputEl.style.height=Math.min(inputEl.scrollHeight,120)+'px';}});
 
