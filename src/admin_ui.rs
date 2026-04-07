@@ -1,24 +1,13 @@
-pub fn render_admin_login(had_token: bool) -> String {
-    format!(
-        r#"<!DOCTYPE html><html><head><title>Admin Login</title>
-<style>body{{background:#1a1b26;color:#c0caf5;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}}
-.box{{background:#24283b;border:1px solid #3b4261;border-radius:8px;padding:30px;text-align:center;}}
-h2{{color:#7aa2f7;margin-bottom:16px;}}
-input{{background:#1a1b26;border:1px solid #3b4261;color:#c0caf5;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:14px;width:250px;}}
-input:focus{{border-color:#7aa2f7;outline:none;}}
-button{{background:#7aa2f7;color:#1a1b26;border:none;padding:8px 20px;border-radius:4px;font-family:monospace;font-size:14px;cursor:pointer;margin-top:12px;font-weight:bold;}}
-button:hover{{opacity:0.9;}} .err{{color:#f7768e;margin-top:8px;font-size:12px;}}</style></head>
-<body><div class="box"><h2>Admin Login</h2><form method="GET" action="/admin">
-<input type="password" name="token" placeholder="Admin password" autofocus>
-<br><button type="submit">Login</button>
-{err}
-</form></div></body></html>"#,
-        err = if had_token {
-            "<div class=\"err\">Invalid password</div>"
-        } else {
-            ""
-        }
-    )
+pub fn render_admin_login() -> String {
+    r#"<!DOCTYPE html><html><head><title>Admin Login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{background:#1a1b26;color:#c0caf5;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}
+.box{background:#24283b;border:1px solid #3b4261;border-radius:8px;padding:30px;text-align:center;}
+h2{color:#7aa2f7;margin-bottom:16px;}
+p{color:#565f89;font-size:12px;margin-top:12px;}</style></head>
+<body><div class="box"><h2>Admin</h2>
+<p>Access the admin dashboard via the URL shown in server logs.</p>
+</div></body></html>"#.to_string()
 }
 
 pub fn render_admin_ui(admin_token: &str) -> String {
@@ -67,6 +56,19 @@ pub fn render_admin_ui(admin_token: &str) -> String {
   .toolbar .spacer {{ flex: 1; }}
   .check {{ width: 16px; height: 16px; accent-color: #7aa2f7; cursor: pointer; }}
   .selected-count {{ color: #7aa2f7; font-size: 12px; }}
+  .group {{ background: #24283b; border: 1px solid #3b4261; border-radius: 8px; margin-bottom: 10px; overflow: hidden; }}
+  .group-header {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }}
+  .group-header:hover {{ background: rgba(122,162,247,0.06); }}
+  .group-toggle {{ font-size: 10px; color: #565f89; transition: transform 0.15s; display: inline-block; }}
+  .group-toggle.open {{ transform: rotate(90deg); }}
+  .group-name {{ font-weight: 600; font-size: 13px; color: #7aa2f7; }}
+  .group-badge {{ font-size: 11px; padding: 1px 7px; border-radius: 10px; background: rgba(122,162,247,0.15); color: #7aa2f7; }}
+  .group-badge-active {{ background: rgba(158,206,106,0.15); color: #9ece6a; }}
+  .group-summary {{ font-size: 11px; color: #565f89; margin-left: auto; }}
+  .group-body {{ display: none; border-top: 1px solid #3b4261; }}
+  .group-body.open {{ display: block; }}
+  .group-body .card {{ border-radius: 0; border-left: none; border-right: none; border-bottom: none; margin-bottom: 0; }}
+  .group-body .card:last-child {{ border-bottom: none; }}
   .toast {{ position: fixed; bottom: 20px; right: 20px; background: #24283b; border: 1px solid #3b4261; color: #9ece6a; padding: 10px 16px; border-radius: 6px; font-size: 13px; display: none; z-index: 100; }}
   select {{ background: #1a1b26; border: 1px solid #3b4261; color: #c0caf5; padding: 5px 8px; border-radius: 4px; font-family: inherit; font-size: 12px; }}
 </style>
@@ -109,6 +111,15 @@ pub fn render_admin_ui(admin_token: &str) -> String {
 <script>
 var adminToken={token_json};
 var allSessions=[];
+var expandedGroups={{}};
+function toggleGroup(name){{
+  expandedGroups[name]=!expandedGroups[name];
+  var body=document.getElementById('group-'+name);
+  var header=body.previousElementSibling;
+  var toggle=header.querySelector('.group-toggle');
+  if(expandedGroups[name]){{body.classList.add('open');toggle.classList.add('open');}}
+  else{{body.classList.remove('open');toggle.classList.remove('open');}}
+}}
 function timeAgo(ts){{var s=Math.floor((Date.now()-ts)/1000);if(s<60)return s+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}}
 function toast(msg){{var el=document.getElementById('toast');el.textContent=msg;el.style.display='block';setTimeout(function(){{el.style.display='none';}},3000);}}
 function adminFetch(url,opts){{opts=opts||{{}};opts.headers=opts.headers||{{}};opts.headers['X-Admin-Token']=adminToken;if(opts.body&&typeof opts.body==='object'){{opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(opts.body);}}return fetch(url,opts).then(function(r){{return r.json();}});}}
@@ -176,21 +187,43 @@ function load(){{
     document.getElementById('select-all').checked=false;
     var el=document.getElementById('sessions');
     if(data.sessions.length===0){{el.innerHTML='<div class="empty">No sessions</div>';updateSelectedCount();return;}}
-    var html='';
     data.sessions.sort(function(a,b){{return b.lastActivity-a.lastActivity;}});
+    var groups={{}};var groupOrder=[];
     for(var i=0;i<data.sessions.length;i++){{
-      var s=data.sessions[i];var statusCls=s.status==='active'?'active':'waiting';
-      html+='<div class="card"><div class="row">';
-      html+='<input type="checkbox" class="check session-check" data-id="'+s.id+'" onchange="updateSelectedCount()">';
-      html+='<span class="status '+statusCls+'">'+s.status+'</span>';
-      html+='<span class="value"><strong>'+s.id.slice(0,20)+'...</strong></span>';
-      html+='<span class="label">client:</span><span class="value">'+s.clientName+'</span>';
-      html+='<span class="label">cli:</span><span class="value">'+(s.hasCli?'\u2705':'\u274C')+'</span>';
-      html+='<span class="label">web:</span><span class="value">'+s.webClients+'</span>';
-      html+='<span class="label">msgs:</span><span class="value">'+s.messageCount+'</span>';
-      html+='<span class="label">active:</span><span class="value">'+timeAgo(s.lastActivity)+'</span>';
-      html+='<span style="flex:1"></span>';
-      html+='<button class="btn btn-danger" onclick="killOne(\''+s.id+'\')">Kill</button>';
+      var s=data.sessions[i];var name=s.clientName||'unknown';
+      if(!groups[name]){{groups[name]=[];groupOrder.push(name);}}
+      groups[name].push(s);
+    }}
+    var html='';
+    for(var g=0;g<groupOrder.length;g++){{
+      var name=groupOrder[g];var items=groups[name];
+      var activeCount=items.filter(function(s){{return s.status==='active';}}).length;
+      var totalMsgs=items.reduce(function(sum,s){{return sum+s.messageCount;}},0);
+      var wasOpen=expandedGroups[name];
+      var openCls=wasOpen?' open':'';
+      html+='<div class="group">';
+      html+='<div class="group-header" onclick="toggleGroup(\''+name+'\')">';
+      html+='<span class="group-toggle'+openCls+'">\u25B6</span>';
+      html+='<span class="group-name">'+name+'</span>';
+      html+='<span class="group-badge">'+items.length+' session'+(items.length!==1?'s':'')+'</span>';
+      if(activeCount>0)html+='<span class="group-badge group-badge-active">'+activeCount+' active</span>';
+      html+='<span class="group-summary">'+totalMsgs+' msgs \u00B7 '+timeAgo(items[0].lastActivity)+'</span>';
+      html+='</div>';
+      html+='<div class="group-body'+openCls+'" id="group-'+name+'">';
+      for(var i=0;i<items.length;i++){{
+        var s=items[i];var statusCls=s.status==='active'?'active':'waiting';
+        html+='<div class="card"><div class="row">';
+        html+='<input type="checkbox" class="check session-check" data-id="'+s.id+'" onchange="updateSelectedCount()">';
+        html+='<span class="status '+statusCls+'">'+s.status+'</span>';
+        html+='<span class="value"><strong>'+s.id.slice(0,16)+'...</strong></span>';
+        html+='<span class="label">cli:</span><span class="value">'+(s.hasCli?'\u2705':'\u274C')+'</span>';
+        html+='<span class="label">web:</span><span class="value">'+s.webClients+'</span>';
+        html+='<span class="label">msgs:</span><span class="value">'+s.messageCount+'</span>';
+        html+='<span class="label">active:</span><span class="value">'+timeAgo(s.lastActivity)+'</span>';
+        html+='<span style="flex:1"></span>';
+        html+='<button class="btn btn-danger" onclick="killOne(\''+s.id+'\')">Kill</button>';
+        html+='</div></div>';
+      }}
       html+='</div></div>';
     }}
     el.innerHTML=html;updateSelectedCount();

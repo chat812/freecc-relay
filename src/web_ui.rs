@@ -11,7 +11,10 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1b26">
 <title>Free CC Relay - {session_id}</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -20,52 +23,65 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
     --text: #c0caf5; --dim: #565f89; --accent: #7aa2f7;
     --green: #9ece6a; --red: #f7768e; --yellow: #e0af68;
     --font: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
   }}
-  body {{ background: var(--bg); color: var(--text); font-family: var(--font); height: 100vh; display: flex; flex-direction: column; }}
-  #header {{ padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }}
-  #header h1 {{ font-size: 14px; font-weight: 600; }}
-  #status {{ font-size: 11px; padding: 2px 8px; border-radius: 10px; }}
+  html {{ height: 100%; }}
+  body {{ background: var(--bg); color: var(--text); font-family: var(--font); height: 100%; display: flex; flex-direction: column; overflow: hidden; -webkit-text-size-adjust: 100%; }}
+  #header {{ padding: 12px 16px; padding-top: calc(12px + var(--safe-top)); padding-left: calc(16px + var(--safe-left)); padding-right: calc(16px + var(--safe-right)); background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; }}
+  #header h1 {{ font-size: 14px; font-weight: 600; white-space: nowrap; }}
+  #status {{ font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }}
   .status-connected {{ background: rgba(158,206,106,0.15); color: var(--green); }}
   .status-disconnected {{ background: rgba(247,118,142,0.15); color: var(--red); }}
   .status-waiting {{ background: rgba(224,175,104,0.15); color: var(--yellow); }}
-  #session-id {{ font-size: 11px; color: var(--dim); margin-left: auto; }}
-  #messages {{ flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }}
-  .msg {{ padding: 8px 12px; border-radius: 6px; max-width: 85%; font-size: 13px; line-height: 1.6; word-wrap: break-word; }}
+  #session-id {{ font-size: 11px; color: var(--dim); margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }}
+  #messages {{ flex: 1; overflow-y: auto; padding: 12px; padding-left: calc(12px + var(--safe-left)); padding-right: calc(12px + var(--safe-right)); display: flex; flex-direction: column; gap: 8px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }}
+  .msg {{ padding: 8px 12px; border-radius: 6px; max-width: 92%; font-size: 14px; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; }}
   .msg-user {{ background: var(--accent); color: #1a1b26; align-self: flex-end; white-space: pre-wrap; }}
-  .msg-assistant {{ background: var(--surface); border: 1px solid var(--border); align-self: flex-start; }}
-  .msg-system {{ background: transparent; color: var(--dim); font-size: 11px; align-self: center; font-style: italic; }}
-  .msg-tool {{ background: rgba(122,162,247,0.06); border: 1px solid rgba(122,162,247,0.15); align-self: flex-start; font-size: 12px; padding: 6px 10px; }}
+  .msg-assistant {{ background: var(--surface); border: 1px solid var(--border); align-self: flex-start; max-width: 96%; }}
+  .msg-system {{ background: transparent; color: var(--dim); font-size: 12px; align-self: center; font-style: italic; }}
+  .msg-tool {{ background: rgba(122,162,247,0.06); border: 1px solid rgba(122,162,247,0.15); align-self: flex-start; font-size: 13px; padding: 6px 10px; max-width: 96%; }}
   .msg-label {{ font-size: 10px; color: var(--dim); margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }}
   .msg-stream {{ border-color: var(--accent); }}
   .md p {{ margin: 0.4em 0; }} .md p:first-child {{ margin-top: 0; }} .md p:last-child {{ margin-bottom: 0; }}
   .md strong {{ color: #e0e0e0; }} .md em {{ color: var(--dim); font-style: italic; }}
-  .md code {{ background: rgba(0,0,0,0.35); padding: 1px 5px; border-radius: 3px; font-size: 12px; }}
-  .md pre {{ background: rgba(0,0,0,0.4); padding: 8px 10px; border-radius: 4px; overflow-x: auto; margin: 0.5em 0; }}
-  .md pre code {{ background: none; padding: 0; }}
+  .md code {{ background: rgba(0,0,0,0.35); padding: 1px 5px; border-radius: 3px; font-size: 13px; }}
+  .md pre {{ background: rgba(0,0,0,0.4); padding: 8px 10px; border-radius: 4px; overflow-x: auto; margin: 0.5em 0; -webkit-overflow-scrolling: touch; }}
+  .md pre code {{ background: none; padding: 0; font-size: 12px; }}
   .md ul, .md ol {{ padding-left: 1.4em; margin: 0.4em 0; }} .md li {{ margin: 0.15em 0; }}
   .md h1,.md h2,.md h3,.md h4 {{ margin: 0.6em 0 0.3em; color: #e0e0e0; }}
   .md h1 {{ font-size: 16px; }} .md h2 {{ font-size: 14px; }} .md h3 {{ font-size: 13px; }}
   .md blockquote {{ border-left: 3px solid var(--border); padding-left: 10px; color: var(--dim); margin: 0.4em 0; }}
   .md a {{ color: var(--accent); text-decoration: underline; }}
   .md hr {{ border: none; border-top: 1px solid var(--border); margin: 0.6em 0; }}
-  .md table {{ border-collapse: collapse; margin: 0.5em 0; font-size: 12px; width: auto; }}
-  .md th, .md td {{ border: 1px solid var(--border); padding: 4px 10px; text-align: left; }}
+  .md table {{ border-collapse: collapse; margin: 0.5em 0; font-size: 12px; width: auto; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }}
+  .md th, .md td {{ border: 1px solid var(--border); padding: 4px 10px; text-align: left; white-space: nowrap; }}
   .md th {{ background: rgba(0,0,0,0.25); font-weight: 600; }}
-  .tool-header {{ display: flex; align-items: center; gap: 6px; user-select: none; flex-wrap: wrap; }}
+  .tool-header {{ display: flex; align-items: center; gap: 6px; user-select: none; flex-wrap: wrap; min-height: 32px; }}
   .tool-icon {{ font-size: 10px; color: var(--accent); }}
-  .tool-name {{ font-weight: 600; color: var(--accent); font-size: 12px; }}
-  .tool-summary {{ color: var(--dim); font-size: 11px; margin-left: 2px; }}
-  .tool-detail {{ display: none; margin-top: 6px; padding: 6px 8px; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 11px; color: var(--dim); max-height: 200px; overflow-y: auto; white-space: pre-wrap; }}
+  .tool-name {{ font-weight: 600; color: var(--accent); font-size: 13px; }}
+  .tool-summary {{ color: var(--dim); font-size: 12px; margin-left: 2px; }}
+  .tool-detail {{ display: none; margin-top: 6px; padding: 6px 8px; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 12px; color: var(--dim); max-height: 200px; overflow-y: auto; white-space: pre-wrap; -webkit-overflow-scrolling: touch; }}
   .tool-detail.open {{ display: block; }}
   .tool-toggle {{ font-size: 9px; color: var(--dim); transition: transform 0.15s; display: inline-block; }}
   .tool-toggle.open {{ transform: rotate(90deg); }}
-  #input-area {{ padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 8px; }}
-  #input {{ flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-family: var(--font); font-size: 13px; outline: none; }}
+  #input-area {{ padding: 10px 12px; padding-bottom: calc(10px + var(--safe-bottom)); padding-left: calc(12px + var(--safe-left)); padding-right: calc(12px + var(--safe-right)); background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: flex-end; flex-shrink: 0; }}
+  #input {{ flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 6px; font-family: var(--font); font-size: 16px; outline: none; resize: none; min-height: 42px; max-height: 120px; line-height: 1.4; }}
   #input:focus {{ border-color: var(--accent); }}
   #input:disabled {{ opacity: 0.5; }}
-  #send-btn {{ background: var(--accent); color: #1a1b26; border: none; padding: 8px 16px; border-radius: 6px; font-family: var(--font); font-size: 13px; cursor: pointer; font-weight: 600; }}
+  #send-btn {{ background: var(--accent); color: #1a1b26; border: none; padding: 10px 16px; border-radius: 6px; font-family: var(--font); font-size: 14px; cursor: pointer; font-weight: 600; min-height: 42px; -webkit-tap-highlight-color: transparent; }}
   #send-btn:hover {{ opacity: 0.9; }}
+  #send-btn:active {{ opacity: 0.7; }}
   #send-btn:disabled {{ opacity: 0.4; cursor: not-allowed; }}
+  @media (max-width: 600px) {{
+    #header h1 {{ font-size: 13px; }}
+    #session-id {{ display: none; }}
+    .msg {{ max-width: 95%; }}
+    .msg-assistant, .msg-tool {{ max-width: 98%; }}
+    .md pre {{ font-size: 11px; }}
+  }}
 </style>
 </head>
 <body>
@@ -76,7 +92,7 @@ pub fn render_web_ui(session_id: &str, _token: &str, ws_url: &str) -> String {
 </div>
 <div id="messages"></div>
 <div id="input-area">
-  <input id="input" type="text" placeholder="Type a message..." autocomplete="off" disabled>
+  <textarea id="input" rows="1" placeholder="Type a message..." autocomplete="off" disabled></textarea>
   <button id="send-btn" disabled>Send</button>
 </div>
 <script>
@@ -171,6 +187,20 @@ function send(){{
 
 sendBtn.addEventListener('click',send);
 inputEl.addEventListener('keydown',function(e){{if(e.key==='Enter'&&!e.shiftKey){{e.preventDefault();send();}}}});
+inputEl.addEventListener('input',function(){{inputEl.style.height='auto';inputEl.style.height=Math.min(inputEl.scrollHeight,120)+'px';}});
+
+// Handle mobile keyboard resize
+if(window.visualViewport){{
+  var viewport=window.visualViewport;
+  function onResize(){{
+    var offset=window.innerHeight-viewport.height;
+    document.body.style.height=viewport.height+'px';
+    messagesEl.scrollTop=messagesEl.scrollHeight;
+  }}
+  viewport.addEventListener('resize',onResize);
+  viewport.addEventListener('scroll',onResize);
+}}
+
 connect();
 </script>
 </body>

@@ -17,15 +17,51 @@ pub struct PairingRequest {
     pub client_name: Option<String>,
 }
 
+const MAX_PENDING_PER_IP: usize = 3;
+const MAX_PENDING_TOTAL: usize = 50;
+const RATE_LIMIT_WINDOW_MS: u64 = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX: usize = 5; // max requests per IP per minute
+
 pub struct PairingManager {
     pub requests: HashMap<String, PairingRequest>,
+    rate_limits: HashMap<String, Vec<u64>>, // ip -> list of request timestamps
 }
 
 impl PairingManager {
     pub fn new() -> Self {
         PairingManager {
             requests: HashMap::new(),
+            rate_limits: HashMap::new(),
         }
+    }
+
+    /// Check if a pairing request is allowed. Returns Err with reason if denied.
+    pub fn check_rate_limit(&mut self, ip: &str) -> Result<(), &'static str> {
+        let now = now_ms();
+
+        // Total pending cap
+        let pending = self.requests.values().filter(|r| r.status == "pending").count();
+        if pending >= MAX_PENDING_TOTAL {
+            return Err("Too many pending requests. Try again later.");
+        }
+
+        // Per-IP pending cap
+        let ip_pending = self.requests.values()
+            .filter(|r| r.ip == ip && r.status == "pending")
+            .count();
+        if ip_pending >= MAX_PENDING_PER_IP {
+            return Err("Too many pending requests from this address.");
+        }
+
+        // Per-IP rate limit (sliding window)
+        let timestamps = self.rate_limits.entry(ip.to_string()).or_default();
+        timestamps.retain(|&t| now - t < RATE_LIMIT_WINDOW_MS);
+        if timestamps.len() >= RATE_LIMIT_MAX {
+            return Err("Too many requests. Please wait a minute.");
+        }
+        timestamps.push(now);
+
+        Ok(())
     }
 
     pub fn create(&mut self, hostname: &str, ip: &str) -> PairingRequest {
@@ -110,6 +146,11 @@ impl PairingManager {
                 "rejected" => age < 60 * 1000,
                 _ => false,
             }
+        });
+        // Clean stale rate limit entries
+        self.rate_limits.retain(|_, timestamps| {
+            timestamps.retain(|&t| now - t < RATE_LIMIT_WINDOW_MS);
+            !timestamps.is_empty()
         });
     }
 }

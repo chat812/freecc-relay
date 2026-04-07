@@ -2,6 +2,7 @@ mod admin_ui;
 mod auth;
 mod pairing;
 mod sessions;
+mod telegram;
 mod web_ui;
 
 use auth::{authenticate_client, generate_key, generate_random_base64, load_config, save_config};
@@ -40,7 +41,13 @@ struct Args {
     tls_key: Option<String>,
     #[arg(long)]
     generate_key: Option<String>,
+    #[arg(long)]
+    telegram_token: Option<String>,
+    #[arg(long)]
+    telegram_admin: Option<i64>,
 }
+
+use std::collections::HashMap as StdHashMap;
 
 #[derive(Clone)]
 struct AppState {
@@ -49,6 +56,8 @@ struct AppState {
     config_path: Arc<PathBuf>,
     pairing: Arc<RwLock<PairingManager>>,
     admin_password: Arc<String>,
+    admin_sessions: Arc<RwLock<StdHashMap<String, u64>>>,
+    telegram_bot: Option<telegram::SharedBot>,
     host: String,
     port: u16,
     is_tls: bool,
@@ -132,12 +141,37 @@ async fn main() {
         });
     }
 
+    let telegram_bot = args.telegram_token.as_ref().map(|token| {
+        let bot_state = AppState {
+            sessions: shared_sessions.clone(),
+            config: Arc::new(RwLock::new(config.clone())),
+            config_path: Arc::new(config_path.clone()),
+            pairing: shared_pairing.clone(),
+            admin_password: Arc::new(admin_password.clone()),
+            admin_sessions: Arc::new(RwLock::new(StdHashMap::new())),
+            telegram_bot: None,
+            host: args.host.clone(),
+            port: args.port,
+            is_tls,
+        };
+        telegram::create_bot(token.clone(), bot_state, args.telegram_admin)
+    });
+
+    if let Some(ref bot) = telegram_bot {
+        let bot = bot.clone();
+        tokio::spawn(async move {
+            telegram::run_polling(bot).await;
+        });
+    }
+
     let state = AppState {
         sessions: shared_sessions,
         config: Arc::new(RwLock::new(config.clone())),
         config_path: Arc::new(config_path.clone()),
         pairing: shared_pairing,
         admin_password: Arc::new(admin_password.clone()),
+        admin_sessions: Arc::new(RwLock::new(StdHashMap::new())),
+        telegram_bot,
         host: args.host.clone(),
         port: args.port,
         is_tls,
@@ -163,7 +197,8 @@ async fn main() {
             get(handle_list_sessions).post(handle_create_session),
         )
         .route("/api/sessions/{id}", delete(handle_delete_session))
-        .route("/admin", get(handle_admin))
+        .route("/admin", get(handle_admin_bare))
+        .route("/admin/{token}", get(handle_admin_with_token))
         .route("/api/admin/sessions", get(handle_admin_list))
         .route("/api/admin/sessions/kill", post(handle_admin_kill))
         .route("/api/admin/sessions/kill-all", post(handle_admin_kill_all))
@@ -196,10 +231,9 @@ async fn main() {
         proto, args.host, args.port
     );
     println!(
-        "  Admin dashboard: {}://{}:{}/admin",
-        proto, args.host, args.port
+        "  Admin dashboard: {}://{}:{}/admin/{}",
+        proto, args.host, args.port, admin_password
     );
-    println!("  Admin password:  {}", admin_password);
     if is_tls {
         println!("  TLS: enabled");
     }
@@ -347,62 +381,90 @@ async fn handle_delete_session(
 
 // --- Admin handlers ---
 
-fn check_admin_token(headers: &HeaderMap, admin_password: &str) -> bool {
-    if let Some(token) = headers.get("x-admin-token").and_then(|v| v.to_str().ok()) {
-        if token == admin_password {
-            return true;
+fn check_admin_header(headers: &HeaderMap, admin_password: &str) -> bool {
+    headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .map(|t| t == admin_password)
+        .unwrap_or(false)
+}
+
+fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let cookie = headers.get("cookie").and_then(|v| v.to_str().ok())?;
+    let prefix = format!("{}=", name);
+    for part in cookie.split(';') {
+        let part = part.trim();
+        if let Some(val) = part.strip_prefix(&prefix) {
+            if !val.is_empty() {
+                return Some(val);
+            }
         }
     }
-    if let Some(cookie) = headers.get("cookie").and_then(|v| v.to_str().ok()) {
-        for part in cookie.split(';') {
-            let part = part.trim();
-            if let Some(val) = part.strip_prefix("admin_token=") {
-                if val == admin_password {
-                    return true;
-                }
+    None
+}
+
+async fn check_admin_auth(headers: &HeaderMap, state: &AppState) -> bool {
+    // X-Admin-Token header (used by admin UI JS)
+    if check_admin_header(headers, &state.admin_password) {
+        return true;
+    }
+    // Session cookie
+    if let Some(session_id) = extract_cookie(headers, "admin_session") {
+        let sessions = state.admin_sessions.read().await;
+        if let Some(&created_at) = sessions.get(session_id) {
+            // Valid for 24 hours
+            if now_ms() - created_at < 24 * 60 * 60 * 1000 {
+                return true;
             }
         }
     }
     false
 }
 
-async fn handle_admin(
+async fn handle_admin_bare(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !check_admin_auth(&headers, &state).await {
+        return Html(admin_ui::render_admin_login()).into_response();
+    }
+    Html(admin_ui::render_admin_ui(&state.admin_password)).into_response()
+}
+
+async fn handle_admin_with_token(
     State(state): State<AppState>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-    headers: HeaderMap,
+    Path(token): Path<String>,
 ) -> Response {
-    let token_param = params.get("token").map(|s| s.as_str());
-    let cookie_header = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let cookie_token = cookie_header
-        .split(';')
-        .find_map(|p| p.trim().strip_prefix("admin_token="));
-
-    let token = token_param.or(cookie_token);
-
-    if token != Some(state.admin_password.as_str()) {
-        let html = admin_ui::render_admin_login(token_param.is_some());
-        return Html(html).into_response();
+    if token != *state.admin_password {
+        return (StatusCode::FORBIDDEN, Html("<h1>Invalid token</h1>".to_string())).into_response();
     }
 
-    let mut response = Html(admin_ui::render_admin_ui(&state.admin_password)).into_response();
-    if token_param.is_some() && cookie_token.is_none() {
-        let secure = if state.is_tls { "; Secure" } else { "" };
-        let cookie = format!(
-            "admin_token={}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=86400{}",
-            state.admin_password, secure
-        );
-        response
-            .headers_mut()
-            .insert("Set-Cookie", cookie.parse().unwrap());
+    // Token valid — set session cookie and redirect to /admin (strips token from URL)
+    let is_tls = state.is_tls;
+    let secure = if is_tls { "; Secure" } else { "" };
+    let session_id = generate_random_base64(24);
+
+    // Store the admin session
+    {
+        let mut sessions = state.admin_sessions.write().await;
+        sessions.insert(session_id.clone(), now_ms());
     }
+
+    let cookie = format!(
+        "admin_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400{}",
+        session_id, secure
+    );
+    let mut response = (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, "/admin")],
+        "",
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert("Set-Cookie", cookie.parse().unwrap());
     response
 }
 
 async fn handle_admin_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !check_admin_token(&headers, &state.admin_password) {
+    if !check_admin_auth(&headers, &state).await {
         return json_response(401, serde_json::json!({"error": "Unauthorized"}));
     }
     let sessions = state.sessions.read().await;
@@ -430,7 +492,7 @@ async fn handle_admin_kill(
     headers: HeaderMap,
     axum::Json(body): axum::Json<KillBody>,
 ) -> Response {
-    if !check_admin_token(&headers, &state.admin_password) {
+    if !check_admin_auth(&headers, &state).await {
         return json_response(401, serde_json::json!({"error": "Unauthorized"}));
     }
     let mut sessions = state.sessions.write().await;
@@ -445,7 +507,7 @@ async fn handle_admin_kill(
 }
 
 async fn handle_admin_kill_all(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !check_admin_token(&headers, &state.admin_password) {
+    if !check_admin_auth(&headers, &state).await {
         return json_response(401, serde_json::json!({"error": "Unauthorized"}));
     }
     let mut sessions = state.sessions.write().await;
@@ -472,7 +534,7 @@ async fn handle_admin_cleanup(
     headers: HeaderMap,
     axum::Json(body): axum::Json<CleanupBody>,
 ) -> Response {
-    if !check_admin_token(&headers, &state.admin_password) {
+    if !check_admin_auth(&headers, &state).await {
         return json_response(401, serde_json::json!({"error": "Unauthorized"}));
     }
     let mut sessions = state.sessions.write().await;
@@ -507,11 +569,21 @@ async fn handle_pair_request(
         .unwrap_or_else(|| "unknown".to_string());
 
     let mut pairing = state.pairing.write().await;
+    if let Err(reason) = pairing.check_rate_limit(&ip) {
+        println!("[pairing] RATE LIMITED {} ({}) - {}", body.hostname, ip, reason);
+        return json_response(429, serde_json::json!({"error": reason}));
+    }
     let request = pairing.create(&body.hostname, &ip);
     println!(
         "[pairing] NEW request from {} ({}) id={}",
         body.hostname, ip, request.id
     );
+
+    // Notify via Telegram
+    if let Some(ref bot) = state.telegram_bot {
+        telegram::notify_new_pairing(bot, &body.hostname, &ip, &request.id).await;
+    }
+
     json_response(
         201,
         serde_json::json!({"pairingId": request.id, "status": "pending"}),
@@ -538,7 +610,7 @@ async fn handle_pair_check(State(state): State<AppState>, Path(id): Path<String>
 }
 
 async fn handle_admin_pairings(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !check_admin_token(&headers, &state.admin_password) {
+    if !check_admin_auth(&headers, &state).await {
         return json_response(401, serde_json::json!({"error": "Unauthorized"}));
     }
     let pairing = state.pairing.read().await;
@@ -557,7 +629,7 @@ async fn handle_admin_approve_pairing(
     headers: HeaderMap,
     axum::Json(body): axum::Json<ApproveBody>,
 ) -> Response {
-    if !check_admin_token(&headers, &state.admin_password) {
+    if !check_admin_auth(&headers, &state).await {
         return json_response(401, serde_json::json!({"error": "Unauthorized"}));
     }
     let mut pairing = state.pairing.write().await;
@@ -589,7 +661,7 @@ async fn handle_admin_reject_pairing(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_admin_token(&headers, &state.admin_password) {
+    if !check_admin_auth(&headers, &state).await {
         return json_response(401, serde_json::json!({"error": "Unauthorized"}));
     }
     let mut pairing = state.pairing.write().await;
